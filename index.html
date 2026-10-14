@@ -212,6 +212,8 @@ const db   = firebase.firestore();
 const col  = name => db.collection(`artifacts/${APP_ID}/public/data/${name}`);
 /* hubCol() → colecciones propias del Hub PCA */
 const hubCol = name => db.collection(`artifacts/${APP_ID}/public/data/hub_pca_${name}`);
+/* Cuentas habilitadas (F1). La seguridad real llega en F2 con las reglas de Firestore. */
+const ALLOWED_EMAILS = ["msoledadvila@gmail.com","hola@talentoimpulsa.com.ar"];
 
 /* ── Toast ── */
 function toast(msg, type=""){
@@ -1185,33 +1187,70 @@ function HomeScreen({onAudit,onFollow,onChecklist}){
 /* ══════════════════════════════════════
    APP ROOT
 ══════════════════════════════════════ */
+/* ══════════════════════════════════════
+   LOGIN (Google · cuentas autorizadas)
+══════════════════════════════════════ */
+function LoginScreen({status,error,onLogin}){
+  const busy = status==="checking"||status==="opening";
+  return <div style={{minHeight:"100vh",background:"var(--cream)",display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+    <form onSubmit={e=>{e.preventDefault();onLogin();}} style={{background:"#fff",borderRadius:16,padding:"36px 28px",width:"min(380px,100%)",boxShadow:"0 8px 24px rgba(26,24,20,.08)",textAlign:"center"}}>
+      <div style={{fontSize:11,letterSpacing:".22em",textTransform:"uppercase",color:"#9A7B3D",fontWeight:600,marginBottom:6}}>Talento Impulsa</div>
+      <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:30,color:"var(--texto)",marginBottom:20}}>Hub PCA™</div>
+      {error && <div style={{background:"#FEE2E2",color:"#B91C1C",borderRadius:8,padding:"8px 12px",fontSize:13,marginBottom:14,textAlign:"left"}}>{error}</div>}
+      <button type="submit" disabled={busy} style={{width:"100%",padding:"12px 16px",border:"none",borderRadius:10,background:"#9A7B3D",color:"#fff",fontFamily:"inherit",fontSize:15,fontWeight:600,cursor:busy?"wait":"pointer",opacity:busy?.7:1}}>
+        {status==="checking"?"Verificando sesión…":status==="opening"?"Abriendo Google…":"Ingresar con Google"}
+      </button>
+      <div style={{fontSize:12,color:"var(--texto-sec)",marginTop:14}}>Acceso solo para las cuentas autorizadas de Talento Impulsa.</div>
+    </form>
+  </div>;
+}
+
 function App(){
   const [screen,  setScreen]  = useState("home");
   const [client,  setClient]  = useState(null);
-  const [fbReady, setFbReady] = useState(false);
+  const [authSt,  setAuthSt]  = useState("checking"); // checking | out | opening | in
+  const [authErr, setAuthErr] = useState("");
 
   useEffect(()=>{
-    const unsub = auth.onAuthStateChanged(user=>{
-      if(!user){ auth.signInAnonymously().catch(()=>{}); }
-      else { setFbReady(true); }
+    const unsub = auth.onAuthStateChanged(async user=>{
+      if(user && !user.isAnonymous){
+        const email=(user.email||"").toLowerCase();
+        if(!ALLOWED_EMAILS.includes(email)){
+          await auth.signOut();
+          setAuthErr("La cuenta "+email+" no tiene acceso al Hub PCA™.");
+          setAuthSt("out"); return;
+        }
+        setAuthErr(""); setAuthSt("in"); return;
+      }
+      if(user && user.isAnonymous){ try{ await auth.signOut(); }catch(_){} }
+      setAuthSt("out");
     });
     return ()=>unsub();
   },[]);
 
+  const login = async () => {
+    setAuthErr(""); setAuthSt("opening");
+    try{
+      const provider = new firebase.auth.GoogleAuthProvider();
+      provider.setCustomParameters({prompt:"select_account"});
+      await auth.signInWithPopup(provider);
+    }catch(ex){
+      const map={"auth/popup-closed-by-user":"Cerraste la ventana de Google antes de terminar.","auth/popup-blocked":"El navegador bloqueó la ventana de Google. Permití ventanas emergentes para este sitio.","auth/unauthorized-domain":"Este dominio no está autorizado en Firebase Authentication.","auth/operation-not-allowed":"El ingreso con Google no está activado en Firebase Authentication."};
+      setAuthErr(map[ex.code]||ex.message); setAuthSt("out");
+    }
+  };
+  const logout = async () => { if(!window.confirm("¿Cerrar sesión?")) return; try{ await auth.signOut(); }catch(_){} window.location.reload(); };
+
   const go = (sc,cl) => { setClient(cl||null); setScreen(sc); window.scrollTo({top:0}); };
 
-  if(!fbReady) return <div style={{minHeight:"100vh",background:"var(--cream)",display:"flex",alignItems:"center",justifyContent:"center"}}>
-    <div style={{textAlign:"center",color:"var(--texto-sec)"}}>
-      <div style={{fontSize:32,marginBottom:12}}>✨</div>
-      <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:22,color:"var(--texto)",marginBottom:6}}>Hub PCA™</div>
-      <div style={{fontSize:13}}>Conectando...</div>
-    </div>
-  </div>;
+  if(authSt!=="in") return <LoginScreen status={authSt} error={authErr} onLogin={login}/>;
 
-  if(screen==="checklist") return <ChecklistScreen client={client} onBack={()=>go("home")}/>;
-  if(screen==="audit")     return <AuditScreen     client={client} onBack={()=>go("home")}/>;
-  if(screen==="follow")    return <FollowScreen     client={client} onBack={()=>go("home")}/>;
-  return <HomeScreen onAudit={c=>go("audit",c)} onFollow={c=>go("follow",c)} onChecklist={c=>go("checklist",c)}/>;
+  const SalirBtn = <button onClick={logout} title={"Cerrar sesión ("+(auth.currentUser?.email||"")+")"} style={{position:"fixed",right:14,bottom:14,zIndex:50,padding:"7px 14px",borderRadius:999,border:"1px solid #C8C0B5",background:"#fff",color:"var(--texto-sec)",fontFamily:"inherit",fontSize:12,cursor:"pointer",boxShadow:"0 2px 8px rgba(26,24,20,.08)"}}>Salir</button>;
+
+  if(screen==="checklist") return <>{SalirBtn}<ChecklistScreen client={client} onBack={()=>go("home")}/></>;
+  if(screen==="audit")     return <>{SalirBtn}<AuditScreen     client={client} onBack={()=>go("home")}/></>;
+  if(screen==="follow")    return <>{SalirBtn}<FollowScreen     client={client} onBack={()=>go("home")}/></>;
+  return <>{SalirBtn}<HomeScreen onAudit={c=>go("audit",c)} onFollow={c=>go("follow",c)} onChecklist={c=>go("checklist",c)}/></>;
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
